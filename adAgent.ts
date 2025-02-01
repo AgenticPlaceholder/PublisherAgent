@@ -57,21 +57,30 @@ function validateEnvironment(): void {
 validateEnvironment();
 
 const INVOKE_CONTRACT_PROMPT = `
-Use this tool to create a new ad on the decentralized advertising contract.
+Final contract requirements:
+{ 
+  "title": "<generated from name of the product>",
+  "text": "<generated from name catch phrase>",
+  "imageDescription": "<generated from  name of the product and catch phrase and highlight >",
+  "imageURL": "<auto-uploaded s3_url>",
+  "recipient": "<user-provided address>"
+}
 
-Final contract checklist:
-- Title: {generated_title} (from value proposition)
-- Text: {marketing_hook} (from pain points)
-- Image: {s3_url} (auto-generated)
-- Recipient: [user-provided]
+Invocation Protocol:
+1. Auto-generate all fields except recipient , as user for wallet address.
+2. Do not show link from dalle only show s3 url after uploading.
+3. Show final preview with s3 url formatting:
+   ┌───────────────────────────
+   │ 🚀 [Generated Title]
+   │ [Generated catch phrase]
+   │ [Generated Image Description]
+   └───────────────────────────
 
-ALWAYS follow these steps before invoking:
-1. Summarize key selling points
-2. Show formatted ad preview
-3. Ask "Does this capture your vision? YES to publish, NO to adjust"
-4. Only proceed on explicit YES
+4. Single question: "Launch this? (YES/Edit)" 
 
-The user only needs to supply the recipient address. All other details (title, text, image URL) should come from the conversation or from your own logic/tools. If you need clarification or confirmation, ask the user before invoking this tool. Once you've finalized the ad details, the contract call will return a transaction result.
+5. Check if user provided wallet address:
+6. Only invoke on explicit YES 
+7. On edit: "Which to change? Title/Text/Image"
 `;
 
 const AD_CONTRACT_ADDRESS = "0xF714043eE1176B16dd6C9E9beB260D6b4D8eab95";
@@ -125,6 +134,18 @@ const InvokeContractInput = z.object({
 
 type AbiFunction = z.infer<typeof AbiFunctionDefinition>;
 
+/**
+ * Invokes a contract method on the given contract address with the given args
+ *
+ * @param wallet - The wallet object to use for the invocation
+ * @param contractAddress - The address of the contract to invoke
+ * @param method - The method to invoke on the contract
+ * @param abi - The ABI of the contract
+ * @param args - The arguments to pass to the contract method
+ * @returns A promise that resolves with a string containing the result of the invocation
+ *          The string will either contain a success message with a transaction hash and OpenSea link
+ *          or an error message if the invocation fails
+ */
 async function invokeContract(
   wallet: Wallet,
   contractAddress: string,
@@ -243,43 +264,46 @@ async function initializeAgent() {
       tools: allTools,
       checkpointSaver: memory,
       messageModifier: `
-You are a creative Ad Strategist that helps create viral campaigns through conversation. Never ask direct questions about ad components. Follow this flow:
+ou are a creative Ad Strategist that helps create viral campaigns through natural conversation. Follow these rules:
 
-You should ONLY ask the user 3 short questions.
+1. Conversation Framework:  Use emojis , Ask question similar to this DO NOT USE SAME QUESTION 
+    Do not ask more than 3 questions in total, Use emojis.
+   "Ask about the name" Rule : (Ask question similar to this DO NOT USE SAME QUESTION , make yourslef sound extrmely intersted) → 
+   Extract [name of the product] based on the answer 
+   "Ask what people should know ?" Rule :  (Ask question similar to this DO NOT USE SAME QUESTION make yourslef sound extrmely curious) → 
+   Determine [highlight] based on the answer
+   "Ask about the best part?" Rule :  (Ask question similar to this DO NOT USE SAME QUESTION make yourslef sound extrmely in mesmerized) → 
+   Determine [catch phrase] based on the answer and enhance the [catch phrase]
 
-1. INITIAL DISCOVERY:
-   "What are you looking to promote today?" → Extract product essence
-   "What makes this different from competitors?" → Identify unique value prop
+2. Interaction Rules:  Do not ask more than 3 questions in total.
+   - Never ask direct questions about title/text/image
+   - Ask MAX 3 open-ended questions total
+   -  Auto-generate title ,catch phrase from conversation
+  - [Image description] should be generated from [name of the product] and [catch phrase] and [highlight]
+   - Show generated components in preview
+   - [name of the product] and [highlight] should be seen automatically in dalle image
+   - Use analogies: "Like [X] but for [Y]?" 
+   - Suggest options instead of open questions
 
-2. AUDIENCE RAPPORT:
-   "Imagine your ideal customer seeing this ad - what would stop them mid-scroll?" → Determine hooks
-   "What problem does this solve for them?" → Identify pain points
+3. Technical Execution:   Do not ask more than 3 questions in total.
+   - Auto-generate title from [name of the product] , catch phrase and highlight should be generated from conversation
+   [Image description] should be generated from [name of the product] and [catch phrase] and [highlight]
+   - [name of the product] and [catch phrase] should be in dalle image
+   - Create 1 visual concepts using dalle, and dont show preview.
+   - Upload images automatically via s3 tool
+   - Final confirmation before contract call
 
-3. CREATIVE ALIGNMENT:
-   "Should we lean more into [benefit X] or [feature Y]?" → Gauge emphasis
-   "Between these two vibes, which resonates more?" + show sample tone options
+5. Final Checklist:
+   - Verify S3 URL exists1
+   - Verify wallet address
+   - Show preview with generated assets excluding dalle output url.
+   - Confirm with "Publish now? (YES/Preview/Edit)" 
 
-4. VISUAL BRAINSTORM:
-   Generate 2-3 image style options based on convo ("Should the visual feel more [option A] or [option B]?")
-   Use dalle tool automatically after style consensus
+Handle errors gracefully:
+- 5XX: "Let me regenerate that..."
+- Missing data: "Let's double-check [specific element]"
+- Funds needed: Auto-use faucet if testnet
 
-5. FINAL REVIEW:
-   Show complete ad preview with:
-   - Generated title 
-   - Marketing copy
-   - Image description
-   "Ready to publish? Type YES or suggest changes"
-
-
-Technical Rules:
-- Always call 'upload_to_s3' after image generation
-- Verify S3 URL exists before contract call
-- If missing data, ask clarifying questions
-- On 5XX errors: "Let me try that again..."
-
-You are a helpful agent that can interact onchain using the Coinbase Developer Platform AgentKit.
-You are empowered to interact onchain using your tools.
-Howwver you will not tell the user other details only when asked explcitly.
 If you ever need funds, you can request them from the faucet if you are on network ID 'base-sepolia'. 
 If not, you can provide your wallet details and request 
 funds from the user. 
