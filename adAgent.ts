@@ -3,6 +3,7 @@ import { CdpToolkit } from "@coinbase/cdp-langchain";
 import { HumanMessage } from "@langchain/core/messages";
 import { MemorySaver } from "@langchain/langgraph";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
+import { DallEAPIWrapper } from "@langchain/openai";
 import { ChatOpenAI } from "@langchain/openai";
 import * as dotenv from "dotenv";
 import * as fs from "fs";
@@ -60,6 +61,9 @@ This tool allows publishing an ad to the decentralized advertising contract. It 
 - The text content of the ad
 
 The tool will execute the contract call and return the transaction result.
+You are expected to assist with coming up with the content of the ad.
+Ask user questions about his had and the content of the ad.
+And Use the final text as the content of the ad.
 `;
 const AD_CONTRACT_ADDRESS = "0x1f169173e8E54b65b4cd321217443E1919728e3c";
 const AD_CONTRACT_ABI = [
@@ -85,9 +89,6 @@ const AbiFunctionDefinition = z.object({
   inputs: z.array(AbiInputOutput),
   outputs: z.array(AbiInputOutput).optional(),
   stateMutability: z.string().optional(),
-});
-const PublishAdInput = z.object({
-  text: z.string().describe("The advertisement content to publish"),
 });
 
 const InvokeContractInput = z.object({
@@ -132,7 +133,7 @@ async function invokeContract(
       return "Contract invocation completed, but transaction hash is not available";
     }
 
-    return `Ad published successfully. Transaction hash: ${txHash}`;
+    return `Ad published successfully. Transaction hash: https://sepolia.basescan.org/tx/${txHash}`;
   } catch (error) {
     if (error instanceof Error) {
       return `Failed to publish ad: ${error.message}`;
@@ -176,10 +177,17 @@ async function initializeAgent() {
 
     // Initialize CDP AgentKit
     const agentkit = await CdpAgentkit.configureWithWallet(config);
-
+    const dallETool = new DallEAPIWrapper({
+      n: 1,
+      model: "dall-e-3",
+      apiKey: process.env.OPENAI_API_KEY,
+    });
     // Initialize CDP AgentKit Toolkit and get tools
     const cdpToolkit = new CdpToolkit(agentkit);
     const tools = cdpToolkit.getTools();
+    const allTools = [...cdpToolkit.getTools(), dallETool];
+    // console.log("Tools:", allTools);
+
     const invokeContractTool = new CdpTool(
       {
         name: "publish_ad",
@@ -201,7 +209,7 @@ async function initializeAgent() {
       agentkit
     );
 
-    tools.push(invokeContractTool);
+    allTools.push(invokeContractTool);
     // Store buffered conversation history in memory
     const memory = new MemorySaver();
     const agentConfig = {
@@ -211,17 +219,20 @@ async function initializeAgent() {
     // Create React Agent using the LLM and CDP AgentKit tools
     const agent = createReactAgent({
       llm,
-      tools,
+      tools: allTools,
       checkpointSaver: memory,
       messageModifier: `
-        You are a helpful agent that can interact onchain using the Coinbase Developer Platform AgentKit.You are specifically configured to publish ads to the decentralized advertising contract at 0x1f169173e8E54b65b4cd321217443E1919728e3c. When asked to publish an ad, you only need the recipient address and ad text You are 
-        empowered to interact onchain using your tools. When you start always request funds if balance is low, If you ever need funds, you can request them from the 
+      You are specifically configured to publish ads to the decentralized advertising network named Placeholder ${AD_CONTRACT_ADDRESS}. And help out the Publishers of Placeholder.
+      Placeholder is an advertising platform that allows users to publish ads on the blockchain.
+      When asked to publish an ad or create the ad , you ask follow up question get to know about the user and his requirements.  
+        You are a helpful agent that can interact onchain using the Coinbase Developer Platform AgentKit.
+        You are empowered to interact onchain using your tools.
+        Howwver you will not tell the user other details only when asked explcitly.
+        When you start always request funds if balance is low, If you ever need funds, you can request them from the 
         faucet if you are on network ID 'base-sepolia'. If not, you can provide your wallet details and request 
         funds from the user. Before executing your first action, get the wallet details to see what network 
-        you're on. If there is a 5XX (internal) HTTP error code, ask the user to try again later. If someone 
-        asks you to do something you can't do with your currently available tools, you must say so, and 
-        encourage them to implement it themselves using the CDP SDK + Agentkit, recommend they go to 
-        docs.cdp.coinbase.com for more information. Be concise and helpful with your responses. Refrain from 
+        you're on. If there is a 5XX (internal) HTTP error code, ask the user to try again later. 
+        If someone  asks you to do something you can't do with your currently available tools, you must say so. Refrain from 
         restating your tools' descriptions unless it is explicitly requested.
         `,
     });

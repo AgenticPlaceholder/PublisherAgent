@@ -1,12 +1,12 @@
 {
-  "name": "@coinbase/cdp-langchain-chatbot-example",
-  "description": "CDP Agentkit Node.js SDK Chatbot Example",
-  "version": "1.0.0",
-  "author": "Coinbase Inc.",
+  "name": "agentic-placeholder",
+  "description": "Ad agent for PlaceholderAds",
+  "version": "0.0.1",
+  "author": "Athelstan Technolabs.",
   "license": "Apache-2.0",
   "scripts": {
-    "start": "NODE_OPTIONS='--no-warnings' ts-node ./chatbot.ts",
-    "dev": " NODE_OPTIONS='--no-warnings' nodemon ./chatbot.ts",
+    "start": "NODE_OPTIONS='--no-warnings' ts-node ./adAgent.ts",
+    "dev": " NODE_OPTIONS='--no-warnings' nodemon ./adAgent.ts",
     "lint": "eslint -c .eslintrc.json *.ts",
     "lint-fix": "eslint -c .eslintrc.json *.ts --fix",
     "format": "prettier -c .prettierrc --write \"**/*.{ts,js,cjs,json,md}\"",
