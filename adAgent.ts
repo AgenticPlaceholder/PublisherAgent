@@ -11,6 +11,7 @@ import * as readline from "readline";
 import { Wallet } from "@coinbase/coinbase-sdk";
 import { CdpTool } from "@coinbase/cdp-langchain";
 import { z } from "zod";
+import { createS3UploadTool } from "./s3UploadTool";
 
 dotenv.config();
 
@@ -56,23 +57,33 @@ function validateEnvironment(): void {
 validateEnvironment();
 
 const INVOKE_CONTRACT_PROMPT = `
-This tool allows publishing an ad to the decentralized advertising contract. It requires:
-- The recipient address for the ad
-- The text content of the ad
+Use this tool to create a new ad on the decentralized advertising contract.
 
-The tool will execute the contract call and return the transaction result.
-You are expected to assist with coming up with the content of the ad.
-Ask user questions about his had and the content of the ad.
-And Use the final text as the content of the ad.
+Final contract checklist:
+- Title: {generated_title} (from value proposition)
+- Text: {marketing_hook} (from pain points)
+- Image: {s3_url} (auto-generated)
+- Recipient: [user-provided]
+
+ALWAYS follow these steps before invoking:
+1. Summarize key selling points
+2. Show formatted ad preview
+3. Ask "Does this capture your vision? YES to publish, NO to adjust"
+4. Only proceed on explicit YES
+
+The user only needs to supply the recipient address. All other details (title, text, image URL) should come from the conversation or from your own logic/tools. If you need clarification or confirmation, ask the user before invoking this tool. Once you've finalized the ad details, the contract call will return a transaction result.
 `;
-const AD_CONTRACT_ADDRESS = "0x1f169173e8E54b65b4cd321217443E1919728e3c";
+
+const AD_CONTRACT_ADDRESS = "0xF714043eE1176B16dd6C9E9beB260D6b4D8eab95";
 const AD_CONTRACT_ABI = [
   {
     inputs: [
       { internalType: "address", name: "to", type: "address" },
+      { internalType: "string", name: "title", type: "string" },
       { internalType: "string", name: "text", type: "string" },
+      { internalType: "string", name: "imageURL", type: "string" },
     ],
-    name: "publishAd",
+    name: "createAd",
     outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
     stateMutability: "nonpayable",
     type: "function",
@@ -100,6 +111,14 @@ const InvokeContractInput = z.object({
       .string()
       .describe(
         "The text content of the ad. e.g. 'Check out our new product!'"
+      ),
+    title: z
+      .string()
+      .describe("The title of the ad. e.g. 'New Product Launch!'"),
+    imageURL: z
+      .string()
+      .describe(
+        "The image URL of the ad. e.g. 'https://example.com/image.jpg'"
       ),
   }),
 });
@@ -133,7 +152,7 @@ async function invokeContract(
       return "Contract invocation completed, but transaction hash is not available";
     }
 
-    return `Ad published successfully. Transaction hash: https://sepolia.basescan.org/tx/${txHash}`;
+    return `Ad Created successfully. Transaction hash: https://sepolia.basescan.org/tx/${txHash} \n https://testnets.opensea.io/${args.to}`;
   } catch (error) {
     if (error instanceof Error) {
       return `Failed to publish ad: ${error.message}`;
@@ -184,13 +203,15 @@ async function initializeAgent() {
     });
     // Initialize CDP AgentKit Toolkit and get tools
     const cdpToolkit = new CdpToolkit(agentkit);
+    const s3Tool = createS3UploadTool(agentkit);
+
     const tools = cdpToolkit.getTools();
-    const allTools = [...cdpToolkit.getTools(), dallETool];
+    const allTools = [...cdpToolkit.getTools(), dallETool, s3Tool];
     // console.log("Tools:", allTools);
 
     const invokeContractTool = new CdpTool(
       {
-        name: "publish_ad",
+        name: "create_ad",
         description: INVOKE_CONTRACT_PROMPT,
         argsSchema: InvokeContractInput,
         func: async (
@@ -200,7 +221,7 @@ async function initializeAgent() {
           return invokeContract(
             wallet,
             AD_CONTRACT_ADDRESS,
-            "publishAd",
+            "createAd",
             AD_CONTRACT_ABI,
             params.args
           );
@@ -222,19 +243,50 @@ async function initializeAgent() {
       tools: allTools,
       checkpointSaver: memory,
       messageModifier: `
-      You are specifically configured to publish ads to the decentralized advertising network named Placeholder ${AD_CONTRACT_ADDRESS}. And help out the Publishers of Placeholder.
-      Placeholder is an advertising platform that allows users to publish ads on the blockchain.
-      When asked to publish an ad or create the ad , you ask follow up question get to know about the user and his requirements.  
-        You are a helpful agent that can interact onchain using the Coinbase Developer Platform AgentKit.
-        You are empowered to interact onchain using your tools.
-        Howwver you will not tell the user other details only when asked explcitly.
-        When you start always request funds if balance is low, If you ever need funds, you can request them from the 
-        faucet if you are on network ID 'base-sepolia'. If not, you can provide your wallet details and request 
-        funds from the user. Before executing your first action, get the wallet details to see what network 
-        you're on. If there is a 5XX (internal) HTTP error code, ask the user to try again later. 
-        If someone  asks you to do something you can't do with your currently available tools, you must say so. Refrain from 
-        restating your tools' descriptions unless it is explicitly requested.
-        `,
+You are a creative Ad Strategist that helps create viral campaigns through conversation. Never ask direct questions about ad components. Follow this flow:
+
+You should ONLY ask the user 3 short questions.
+
+1. INITIAL DISCOVERY:
+   "What are you looking to promote today?" → Extract product essence
+   "What makes this different from competitors?" → Identify unique value prop
+
+2. AUDIENCE RAPPORT:
+   "Imagine your ideal customer seeing this ad - what would stop them mid-scroll?" → Determine hooks
+   "What problem does this solve for them?" → Identify pain points
+
+3. CREATIVE ALIGNMENT:
+   "Should we lean more into [benefit X] or [feature Y]?" → Gauge emphasis
+   "Between these two vibes, which resonates more?" + show sample tone options
+
+4. VISUAL BRAINSTORM:
+   Generate 2-3 image style options based on convo ("Should the visual feel more [option A] or [option B]?")
+   Use dalle tool automatically after style consensus
+
+5. FINAL REVIEW:
+   Show complete ad preview with:
+   - Generated title 
+   - Marketing copy
+   - Image description
+   "Ready to publish? Type YES or suggest changes"
+
+
+Technical Rules:
+- Always call 'upload_to_s3' after image generation
+- Verify S3 URL exists before contract call
+- If missing data, ask clarifying questions
+- On 5XX errors: "Let me try that again..."
+
+You are a helpful agent that can interact onchain using the Coinbase Developer Platform AgentKit.
+You are empowered to interact onchain using your tools.
+Howwver you will not tell the user other details only when asked explcitly.
+If you ever need funds, you can request them from the faucet if you are on network ID 'base-sepolia'. 
+If not, you can provide your wallet details and request 
+funds from the user. 
+If there is a 5XX (internal) HTTP error code, ask the user to try again later. 
+If someone  asks you to do something you can't do with your currently available tools, you must say so. Refrain from 
+restating your tools' descriptions unless it is explicitly requested.
+`,
     });
 
     // Save wallet data

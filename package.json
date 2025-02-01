@@ -18,6 +18,8 @@
     "@langchain/core": "^0.3.19",
     "@langchain/langgraph": "^0.2.21",
     "@langchain/openai": "^0.3.17",
+    "aws-sdk": "^2.1692.0",
+    "axios": "^1.7.9",
     "dotenv": "^16.4.5",
     "zod": "^3.22.4"
   },
