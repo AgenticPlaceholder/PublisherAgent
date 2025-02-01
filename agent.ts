@@ -24,7 +24,7 @@ function validateEnvironment(): void {
 
   // Check required variables
   const requiredVars = [
-    "OPENAI_API_KEY",
+    "XAI_API_KEY",
     "CDP_API_KEY_NAME",
     "CDP_API_KEY_PRIVATE_KEY",
   ];
@@ -55,25 +55,16 @@ function validateEnvironment(): void {
 validateEnvironment();
 
 const INVOKE_CONTRACT_PROMPT = `
-This tool allows publishing an ad to the decentralized advertising contract. It requires:
-- The recipient address for the ad
-- The text content of the ad
+This tool allows invoking arbitrary smart contract methods. It requires:
+- The contract's ABI (Application Binary Interface)
+- The contract's address
+- The method name to call
+- The parameters for the method
 
 The tool will execute the contract call and return the transaction result.
 `;
-const AD_CONTRACT_ADDRESS = "0x1f169173e8E54b65b4cd321217443E1919728e3c";
-const AD_CONTRACT_ABI = [
-  {
-    inputs: [
-      { internalType: "address", name: "to", type: "address" },
-      { internalType: "string", name: "text", type: "string" },
-    ],
-    name: "publishAd",
-    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
-    stateMutability: "nonpayable",
-    type: "function",
-  },
-];
+
+// Define schemas for ABI types
 const AbiInputOutput = z.object({
   name: z.string(),
   type: z.string(),
@@ -86,25 +77,38 @@ const AbiFunctionDefinition = z.object({
   outputs: z.array(AbiInputOutput).optional(),
   stateMutability: z.string().optional(),
 });
-const PublishAdInput = z.object({
-  text: z.string().describe("The advertisement content to publish"),
-});
 
+// Define the input schema using Zod
 const InvokeContractInput = z.object({
-  args: z.object({
-    to: z
-      .string()
-      .describe("The recipient address for the ad. e.g. '0x1234...'"),
-    text: z
-      .string()
-      .describe(
-        "The text content of the ad. e.g. 'Check out our new product!'"
-      ),
-  }),
+  contractAddress: z
+    .string()
+    .describe("The address of the smart contract. e.g. '0x1234...'"),
+  method: z
+    .string()
+    .describe("The name of the contract method to call. e.g. 'transfer'"),
+  abi: z
+    .array(AbiFunctionDefinition)
+    .describe("The ABI of the contract function"),
+  args: z
+    .record(z.string(), z.any())
+    .describe(
+      "The arguments for the contract method as key-value pairs. e.g. { to: '0x5678...', value: '100' }"
+    ),
 });
 
+// Define the type for the ABI function definition
 type AbiFunction = z.infer<typeof AbiFunctionDefinition>;
 
+/**
+ * Invokes an arbitrary smart contract method with the provided parameters
+ *
+ * @param wallet - The wallet to use for the contract interaction
+ * @param contractAddress - The address of the smart contract
+ * @param method - The name of the contract method to call
+ * @param abi - The ABI of the contract function
+ * @param args - The arguments for the contract method
+ * @returns A string containing the transaction result
+ */
 async function invokeContract(
   wallet: Wallet,
   contractAddress: string,
@@ -113,11 +117,13 @@ async function invokeContract(
   args: Record<string, any>
 ): Promise<string> {
   try {
+    // Validate that the method exists in the ABI
     const methodAbi = abi.find((func) => func.name === method);
     if (!methodAbi) {
       throw new Error(`Method ${method} not found in ABI`);
     }
 
+    // Invoke the contract
     const contractInvocation = await wallet.invokeContract({
       contractAddress,
       method,
@@ -125,6 +131,7 @@ async function invokeContract(
       abi,
     });
 
+    // Wait for the transaction to be confirmed
     const receipt = await contractInvocation.wait();
     const txHash = receipt.getTransactionHash();
 
@@ -132,12 +139,12 @@ async function invokeContract(
       return "Contract invocation completed, but transaction hash is not available";
     }
 
-    return `Ad published successfully. Transaction hash: ${txHash}`;
+    return `Contract invocation successful. Transaction hash: ${txHash}`;
   } catch (error) {
     if (error instanceof Error) {
-      return `Failed to publish ad: ${error.message}`;
+      return `Contract invocation failed: ${error.message}`;
     }
-    return "Failed to publish ad due to an unknown error";
+    return "Contract invocation failed with an unknown error";
   }
 }
 
@@ -151,9 +158,13 @@ const WALLET_DATA_FILE = "wallet_data.txt";
  */
 async function initializeAgent() {
   try {
-    // Initialize LLM
+    // Initialize LLM with xAI configuration
     const llm = new ChatOpenAI({
-      model: "gpt-4o-mini",
+      model: "grok-beta",
+      apiKey: process.env.XAI_API_KEY,
+      configuration: {
+        baseURL: "https://api.x.ai/v1",
+      },
     });
 
     let walletDataStr: string | null = null;
@@ -168,21 +179,22 @@ async function initializeAgent() {
       }
     }
 
-    // Configure CDP AgentKit
+    // Configure CDP Agentkit
     const config = {
       cdpWalletData: walletDataStr || undefined,
-      networkId: "base-sepolia",
+      networkId: process.env.NETWORK_ID || "base-sepolia",
     };
 
-    // Initialize CDP AgentKit
+    // Initialize CDP agentkit
     const agentkit = await CdpAgentkit.configureWithWallet(config);
 
-    // Initialize CDP AgentKit Toolkit and get tools
+    // Initialize CDP Agentkit Toolkit and get tools
     const cdpToolkit = new CdpToolkit(agentkit);
     const tools = cdpToolkit.getTools();
+
     const invokeContractTool = new CdpTool(
       {
-        name: "publish_ad",
+        name: "invoke_contract",
         description: INVOKE_CONTRACT_PROMPT,
         argsSchema: InvokeContractInput,
         func: async (
@@ -191,9 +203,9 @@ async function initializeAgent() {
         ) => {
           return invokeContract(
             wallet,
-            AD_CONTRACT_ADDRESS,
-            "publishAd",
-            AD_CONTRACT_ABI,
+            params.contractAddress,
+            params.method,
+            params.abi,
             params.args
           );
         },
@@ -201,29 +213,22 @@ async function initializeAgent() {
       agentkit
     );
 
+    // Add the tool to your toolkit
     tools.push(invokeContractTool);
+
     // Store buffered conversation history in memory
     const memory = new MemorySaver();
     const agentConfig = {
-      configurable: { thread_id: "CDP AgentKit Chatbot Example!" },
+      configurable: { thread_id: "CDP Agentkit Chatbot Example!" },
     };
 
-    // Create React Agent using the LLM and CDP AgentKit tools
+    // Create React Agent using the LLM and CDP Agentkit tools
     const agent = createReactAgent({
       llm,
       tools,
       checkpointSaver: memory,
-      messageModifier: `
-        You are a helpful agent that can interact onchain using the Coinbase Developer Platform AgentKit.You are specifically configured to publish ads to the decentralized advertising contract at 0x1f169173e8E54b65b4cd321217443E1919728e3c. When asked to publish an ad, you only need the recipient address and ad text You are 
-        empowered to interact onchain using your tools. When you start always request funds if balance is low, If you ever need funds, you can request them from the 
-        faucet if you are on network ID 'base-sepolia'. If not, you can provide your wallet details and request 
-        funds from the user. Before executing your first action, get the wallet details to see what network 
-        you're on. If there is a 5XX (internal) HTTP error code, ask the user to try again later. If someone 
-        asks you to do something you can't do with your currently available tools, you must say so, and 
-        encourage them to implement it themselves using the CDP SDK + Agentkit, recommend they go to 
-        docs.cdp.coinbase.com for more information. Be concise and helpful with your responses. Refrain from 
-        restating your tools' descriptions unless it is explicitly requested.
-        `,
+      messageModifier:
+        "You are a helpful agent that can interact onchain using the Coinbase Developer Platform Agentkit. You are empowered to interact onchain using your tools. If you ever need funds, you can request them from the faucet if you are on network ID `base-sepolia`. If not, you can provide your wallet details and request funds from the user. If someone asks you to do something you can't do with your currently available tools, you must say so, and encourage them to implement it themselves using the CDP SDK + Agentkit, recommend they go to docs.cdp.coinbase.com for more informaton. Be concise and helpful with your responses. Refrain from restating your tools' descriptions unless it is explicitly requested.",
     });
 
     // Save wallet data
@@ -244,11 +249,9 @@ async function initializeAgent() {
  * @param config - Agent configuration
  * @param interval - Time interval between actions in seconds
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function runAutonomousMode(agent: any, config: any, interval = 10) {
   console.log("Starting autonomous mode...");
 
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     try {
       const thought =
@@ -285,7 +288,6 @@ async function runAutonomousMode(agent: any, config: any, interval = 10) {
  * @param agent - The agent executor
  * @param config - Agent configuration
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function runChatMode(agent: any, config: any) {
   console.log("Starting chat mode... Type 'exit' to end.");
 
@@ -298,7 +300,6 @@ async function runChatMode(agent: any, config: any) {
     new Promise((resolve) => rl.question(prompt, resolve));
 
   try {
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       const userInput = await question("\nPrompt: ");
 
@@ -344,7 +345,6 @@ async function chooseMode(): Promise<"chat" | "auto"> {
   const question = (prompt: string): Promise<string> =>
     new Promise((resolve) => rl.question(prompt, resolve));
 
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     console.log("\nAvailable modes:");
     console.log("1. chat    - Interactive chat mode");

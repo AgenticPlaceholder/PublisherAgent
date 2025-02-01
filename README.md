@@ -1,5 +1,3 @@
-# PublisherAgent
-
 # CDP AgentKit Langchain Extension Examples - Chatbot Typescript
 
 This example demonstrates an agent setup as a terminal style chatbot with access to the full set of CDP AgentKit actions.
