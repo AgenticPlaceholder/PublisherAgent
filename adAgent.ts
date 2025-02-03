@@ -486,15 +486,15 @@ async function startServer() {
 
     // POST /chat endpoint: Expects a JSON payload like { "prompt": "Your chat prompt here" }
     app.post("/chat", async (req, res) => {
-      const { prompt } = req.body;
-      if (!prompt) {
-        return res.status(400).json({ error: "Prompt is required." });
+      const { text } = req.body;
+      if (!text) {
+        return res.status(400).json({ error: "Text is required." });
       }
       try {
         // Use the agent's stream function to process the prompt.
         // Here we accumulate the output and then send it as a complete response.
         const stream = await agent.stream(
-          { messages: [new HumanMessage(prompt)] },
+          { messages: [new HumanMessage(text)] },
           config
         );
 
@@ -507,14 +507,14 @@ async function startServer() {
             responseText += chunk.tools.messages[0].content;
           }
         }
-        return res.json({ response: responseText });
+        return res.json({ text: responseText });
       } catch (error) {
         console.error("Error processing chat:", error);
         return res.status(500).json({ error: "Error processing chat prompt." });
       }
     });
 
-    const PORT = process.env.PORT || 3000;
+    const PORT = process.env.PORT || 3031;
     app.listen(PORT, () => {
       console.log(`Chat endpoint is listening on port ${PORT}`);
     });
@@ -526,15 +526,15 @@ async function startServer() {
 
 async function main() {
   try {
-    const { agent, config } = await initializeAgent();
-    const mode = await chooseMode();
+    await startServer();
+    // const { agent, config } = await initializeAgent();
+    // const mode = await chooseMode();
 
-    if (mode === "chat") {
-      await runChatMode(agent, config);
-      // await startServer();
-    } else {
-      await runAutonomousMode(agent, config);
-    }
+    // if (mode === "chat") {
+    //   await runChatMode(agent, config);
+    // } else {
+    //   await runAutonomousMode(agent, config);
+    // }
   } catch (error) {
     if (error instanceof Error) {
       console.error("Error:", error.message);
