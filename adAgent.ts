@@ -1,3 +1,5 @@
+import express from "express";
+
 import { CdpAgentkit } from "@coinbase/cdp-agentkit-core";
 import { CdpToolkit } from "@coinbase/cdp-langchain";
 import { HumanMessage } from "@langchain/core/messages";
@@ -81,7 +83,7 @@ Invocation Protocol:
 7. If the user chooses Edit, prompt: "Which to change? Title/Text/Image"
 `;
 
-const AD_CONTRACT_ADDRESS = "0xF714043eE1176B16dd6C9E9beB260D6b4D8eab95";
+const AD_CONTRACT_ADDRESS = "0x9783b15FDb0442854f55749f90815475Edd692d5";
 const AD_CONTRACT_ABI = [
   {
     inputs: [
@@ -283,8 +285,8 @@ You are a creative Ad Strategist that helps create viral campaigns through natur
 ─────────────────────────────  
 - Auto-generate the title from the [name of the product].
 - Auto-generate the catch phrase from the conversation.
-- Generate the [image description] using the [catch phrase] and [highlight], and explicitly include the [name of the product].
-- Ensure that [name of the product] and [highlight] appear automatically in the DALL·E image.
+- Generate the [image description] using the [catch phrase] and [highlight], and explicitly include the [name of the product] in the image description.
+- Ensure that [name of the product] in the DALL·E image.
 
 ─────────────────────────────  
 3. Technical Execution:
@@ -474,6 +476,54 @@ async function chooseMode(): Promise<"chat" | "auto"> {
 /**
  * Start the chatbot agent
  */
+
+async function startServer() {
+  try {
+    const { agent, config } = await initializeAgent();
+
+    const app = express();
+    app.use(express.json());
+
+    // POST /chat endpoint: Expects a JSON payload like { "prompt": "Your chat prompt here" }
+    app.post("/chat", async (req, res) => {
+      const { prompt } = req.body;
+      if (!prompt) {
+        return res.status(400).json({ error: "Prompt is required." });
+      }
+      try {
+        // Use the agent's stream function to process the prompt.
+        // Here we accumulate the output and then send it as a complete response.
+        const stream = await agent.stream(
+          { messages: [new HumanMessage(prompt)] },
+          config
+        );
+
+        let responseText = "";
+        for await (const chunk of stream) {
+          // Check if the chunk comes from the agent or tools.
+          if ("agent" in chunk) {
+            responseText += chunk.agent.messages[0].content;
+          } else if ("tools" in chunk) {
+            responseText += chunk.tools.messages[0].content;
+          }
+        }
+        return res.json({ response: responseText });
+      } catch (error) {
+        console.error("Error processing chat:", error);
+        return res.status(500).json({ error: "Error processing chat prompt." });
+      }
+    });
+
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, () => {
+      console.log(`Chat endpoint is listening on port ${PORT}`);
+    });
+  } catch (error) {
+    console.error("Error starting the server:", error);
+    process.exit(1);
+  }
+}
+
 async function main() {
   try {
     const { agent, config } = await initializeAgent();
@@ -481,6 +531,7 @@ async function main() {
 
     if (mode === "chat") {
       await runChatMode(agent, config);
+      // await startServer();
     } else {
       await runAutonomousMode(agent, config);
     }
