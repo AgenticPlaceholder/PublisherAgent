@@ -1,5 +1,3 @@
-import express from "express";
-
 import { CdpAgentkit } from "@coinbase/cdp-agentkit-core";
 import { CdpToolkit } from "@coinbase/cdp-langchain";
 import { HumanMessage } from "@langchain/core/messages";
@@ -61,11 +59,11 @@ validateEnvironment();
 const INVOKE_CONTRACT_PROMPT = `
 Final contract requirements:
 { 
+  "to": "<user-provided address>"
   "title": "<generated from name of the product>",
   "text": "<generated from catch phrase>",
   "imageDescription": "<generated from name of the product, catch phrase, and highlight>",
   "imageURL": "<auto-uploaded S3 URL>",
-  "recipient": "<user-provided address>"
 }
 
 Invocation Protocol:
@@ -78,12 +76,13 @@ Invocation Protocol:
    │ [Generated Catch Phrase]
    │ [Generated Image Description]
    └───────────────────────────
-5. Ask a single question: "Launch this? (YES/Edit)"
-6. Only invoke the contract on explicit YES.
-7. If the user chooses Edit, prompt: "Which to change? Title/Text/Image"
+5. Ask for the user's wallet address.
+6. Ask a single question: "Launch this? (YES/Edit)"
+7. Only invoke the contract on explicit YES.
+8. If the user chooses Edit, prompt: "Which to change? Title/Text/Image"
 `;
 
-const AD_CONTRACT_ADDRESS = "0x9783b15FDb0442854f55749f90815475Edd692d5";
+const AD_CONTRACT_ADDRESS = "0x7C4Cc48b56c1CC695D488709f0045ddb8816E569";
 const AD_CONTRACT_ABI = [
   {
     inputs: [
@@ -116,14 +115,14 @@ const InvokeContractInput = z.object({
     to: z
       .string()
       .describe("The recipient address for the ad. e.g. '0x1234...'"),
+    title: z
+      .string()
+      .describe("The title of the ad. e.g. 'New Product Launch!'"),
     text: z
       .string()
       .describe(
         "The text content of the ad. e.g. 'Check out our new product!'"
       ),
-    title: z
-      .string()
-      .describe("The title of the ad. e.g. 'New Product Launch!'"),
     imageURL: z
       .string()
       .describe(
@@ -299,14 +298,15 @@ d. Create a final preview that displays:
    - Auto-generated Catch Phrase (enhanced from conversation)
    - Auto-generated Image Description (must include [name of the product], [catch phrase], and [highlight])
    - The S3 URL for the image (do not reveal the DALL·E link)
-e. Ask: “Publish now? (YES/Preview/Edit)”  
-f. **Invoke the contract only after receiving an explicit YES.**
+e. Ask for the user's wallet address
+g. Ask: “Publish now? (YES/Preview/Edit)”  
+h. **Invoke the contract only after receiving an explicit YES.**
 
 ─────────────────────────────  
 4. Final Checklist:
 ─────────────────────────────  
 - Ensure the S3 URL is verified.
-- Confirm that a wallet address is provided; if missing, prompt: “Please provide your wallet address.”
+- Confirm that a wallet address is provided;
 - Display the final preview in this format:
 
        ┌───────────────────────────
@@ -476,53 +476,6 @@ async function chooseMode(): Promise<"chat" | "auto"> {
 /**
  * Start the chatbot agent
  */
-
-async function startServer() {
-  try {
-    const { agent, config } = await initializeAgent();
-
-    const app = express();
-    app.use(express.json());
-
-    // POST /chat endpoint: Expects a JSON payload like { "prompt": "Your chat prompt here" }
-    app.post("/chat", async (req, res) => {
-      const { prompt } = req.body;
-      if (!prompt) {
-        return res.status(400).json({ error: "Prompt is required." });
-      }
-      try {
-        // Use the agent's stream function to process the prompt.
-        // Here we accumulate the output and then send it as a complete response.
-        const stream = await agent.stream(
-          { messages: [new HumanMessage(prompt)] },
-          config
-        );
-
-        let responseText = "";
-        for await (const chunk of stream) {
-          // Check if the chunk comes from the agent or tools.
-          if ("agent" in chunk) {
-            responseText += chunk.agent.messages[0].content;
-          } else if ("tools" in chunk) {
-            responseText += chunk.tools.messages[0].content;
-          }
-        }
-        return res.json({ response: responseText });
-      } catch (error) {
-        console.error("Error processing chat:", error);
-        return res.status(500).json({ error: "Error processing chat prompt." });
-      }
-    });
-
-    const PORT = process.env.PORT || 3000;
-    app.listen(PORT, () => {
-      console.log(`Chat endpoint is listening on port ${PORT}`);
-    });
-  } catch (error) {
-    console.error("Error starting the server:", error);
-    process.exit(1);
-  }
-}
 
 async function main() {
   try {
